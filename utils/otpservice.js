@@ -1,67 +1,31 @@
-import jwt from 'jsonwebtoken';
-import { CONFIG } from '../config/database.js';
-import { generateOTP, generateSessionId, log } from './helpers.js';
-
-export const generateJWT = (payload, expiresIn = '24h') => {
-  return jwt.sign(payload, CONFIG.JWT_SECRET, { expiresIn });
-};
-
-export const createOTPSession = () => {
-  return {
-    sessionId: generateSessionId(),
-    otp: generateOTP()
-  };
-};
-
-export const createLoginSession = async (pool, identifier, otp, sessionId, userId, loginMethod, req) => {
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-  const ipAddress = req.ip || req.connection.remoteAddress;
-  const userAgent = req.get('User-Agent');
+export const sendLoginOTP = (emailService, config) => async (email, otp, isResend = false) => {
+  const subject = isResend ? 'New Login Verification Code' : 'Login Verification Code';
+  const emailHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #333; text-align: center;">
+        ${isResend ? 'New ' : ''}Email Login Verification
+      </h2>
+      <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+        <p style="font-size: 16px; color: #555;">
+          ${isResend ? 'You requested a new verification code.' : 'Hello! Someone is trying to login to your account using email.'}
+        </p>
+        <p style="font-size: 16px; color: #555;">Your verification code is:</p>
+        <div style="text-align: center; margin: 20px 0;">
+          <span style="font-size: 32px; font-weight: bold; color: #007bff; letter-spacing: 5px;">
+            ${otp}
+          </span>
+        </div>
+        <p style="font-size: 14px; color: #666;">
+          This code will expire in 10 minutes. If you didn't request this, please ignore this email.
+        </p>
+      </div>
+    </div>
+  `;
   
-  await pool.execute(
-    'INSERT INTO login_sessions (identifier, otp, session_id, expires_at, user_id, login_method, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [identifier, otp, sessionId, expiresAt, userId, loginMethod, ipAddress, userAgent]
-  );
+  return await emailService(email, subject, emailHtml);
 };
 
-export const verifyOTPSession = async (pool, otp, sessionId, loginMethod) => {
-  const [sessions] = await pool.execute(
-    'SELECT * FROM login_sessions WHERE otp = ? AND session_id = ? AND expires_at > NOW() AND otp_used = FALSE AND login_method = ? ORDER BY created_at DESC LIMIT 1',
-    [otp, sessionId, loginMethod]
-  );
-  
-  return sessions.length > 0 ? sessions[0] : null;
-};
-
-export const markOTPUsed = async (pool, sessionId) => {
-  await pool.execute('UPDATE login_sessions SET otp_used = TRUE WHERE id = ?', [sessionId]);
-};
-
-export const getActiveSession = async (pool, sessionId, loginMethod) => {
-  const [sessions] = await pool.execute(
-    'SELECT * FROM login_sessions WHERE session_id = ? AND expires_at > NOW() AND login_method = ? ORDER BY created_at DESC LIMIT 1',
-    [sessionId, loginMethod]
-  );
-  
-  return sessions.length > 0 ? sessions[0] : null;
-};
-
-export const updateOTPSession = async (pool, sessionId, sessionDbId, newOTP) => {
-  const newExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
-  
-  await pool.execute(
-    'UPDATE login_sessions SET otp = ?, expires_at = ?, otp_used = FALSE, created_at = NOW() WHERE session_id = ? AND id = ?',
-    [newOTP, newExpiresAt, sessionId, sessionDbId]
-  );
-};
-
-export const cleanupExpiredSessions = async (pool) => {
-  try {
-    const [result] = await pool.execute('DELETE FROM login_sessions WHERE expires_at < NOW()');
-    if (result.affectedRows > 0) {
-      log('info', `🧹 Cleaned up ${result.affectedRows} expired sessions`);
-    }
-  } catch (error) {
-    log('error', 'Cleanup error', { error: error.message });
-  }
+export const sendPhoneOTP = (smsService, config) => async (phone, otp, isResend = false) => {
+  const message = `${config.APP_NAME}: Your ${isResend ? 'new ' : ''}verification code is ${otp}. This code expires in 10 minutes. If you didn't request this, please ignore.`;
+  return await smsService(phone, message);
 };

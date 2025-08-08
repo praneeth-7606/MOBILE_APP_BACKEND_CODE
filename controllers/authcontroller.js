@@ -1,41 +1,46 @@
-import validator from 'validator';
-import { User } from '../models/user.js';
-
-import { LoginSession } from '../models/loginsession.js';
-import { generateJWT,createOTPSession } from '../utils/otpservice.js';
-
-import { sendLoginOTP,sendPhoneOTP } from '../utils/emailservice.js';
-
-import { formatResponse, maskEmail, maskPhone, log } from '../utils/helpers.js';
-import { CONFIG } from '../config/database.js';
+import jwt from 'jsonwebtoken';
+import { formatResponse, generateOTP, generateSessionId, generateJWT, maskEmail, maskPhone, log } from '../utils/helpers.js';
+import { sendLoginOTP, sendPhoneOTP } from '../utils/otpservice.js'; // Fixed typo: otpservice -> otpService
 
 export class AuthController {
-  constructor(pool) {
+  constructor(pool, userModel, loginSessionModel, emailService, smsService, config) {
     this.pool = pool;
-    this.userModel = new User(pool);
-    this.sessionModel = new LoginSession(pool);
+    this.userModel = userModel;
+    this.loginSessionModel = loginSessionModel;
+    this.emailService = emailService;
+    this.smsService = smsService;
+    this.config = config;
   }
 
-  async emailLogin(req, res) {
+  // =============================================================================
+  // EMAIL LOGIN METHODS
+  // =============================================================================
+
+  emailLogin = async (req, res) => {
     try {
-      const { identifier } = req.body;
+      const { identifier, termsAccepted } = req.body;
       
-      // Find or create user
+      if (!identifier || !termsAccepted) {
+        return res.status(400).json(formatResponse(false, 'Email and terms acceptance are required'));
+      }
+      
       const user = await this.userModel.findOrCreate(identifier, 'email');
       if (!user) {
         return res.status(500).json(formatResponse(false, 'Unable to process request'));
       }
       
-      // Generate OTP and session
-      const { sessionId, otp } = createOTPSession();
+      const sessionId = generateSessionId();
+      const otp = generateOTP();
       
-      // Store session
-      await this.sessionModel.create(identifier, otp, sessionId, user.id, 'email', req);
+      await this.loginSessionModel.create(identifier, otp, sessionId, user.id, 'email', req);
       
-      // Send OTP email
-      const emailResult = await sendLoginOTP(identifier, otp);
+      const emailOTPSender = sendLoginOTP(this.emailService, this.config);
+      const emailResult = await emailOTPSender(identifier, otp);
+      
       if (!emailResult.success) {
         log('warn', 'Failed to send email OTP', { email: identifier });
+      } else {
+        log('info', `🔧 Email OTP for ${identifier}: ${otp} (Session: ${sessionId})`);
       }
       
       log('info', 'Email login initiated', { email: identifier, sessionId });
@@ -44,82 +49,42 @@ export class AuthController {
         sessionId,
         emailSent: maskEmail(identifier),
         loginType: 'email',
-        devMode: CONFIG.NODE_ENV === 'development' ? { otp } : undefined
+        devMode: this.config.NODE_ENV === 'development' ? { otp } : undefined
       }));
       
     } catch (error) {
       log('error', 'Email login error', { error: error.message });
       res.status(500).json(formatResponse(false, 'Internal server error'));
     }
-  }
+  };
 
-  async phoneLogin(req, res) {
-    try {
-      const { identifier } = req.body;
-      
-      // Find or create user
-      const user = await this.userModel.findOrCreate(identifier, 'phone');
-      if (!user) {
-        return res.status(500).json(formatResponse(false, 'Unable to process request'));
-      }
-      
-      // Generate OTP and session
-      const { sessionId, otp } = createOTPSession();
-      
-      // Store session
-      await this.sessionModel.create(identifier, otp, sessionId, user.id, 'phone', req);
-      
-      // Send OTP SMS
-      const smsResult = await sendPhoneOTP(identifier, otp);
-      if (!smsResult.success) {
-        log('warn', 'Failed to send SMS OTP', { phone: identifier });
-      }
-      
-      log('info', 'Phone login initiated', { phone: identifier, sessionId });
-      
-      res.json(formatResponse(true, 'Verification code sent to your phone number', {
-        sessionId,
-        phoneSent: maskPhone(identifier),
-        loginType: 'phone',
-        devMode: CONFIG.NODE_ENV === 'development' ? { otp } : undefined
-      }));
-      
-    } catch (error) {
-      log('error', 'Phone login error', { error: error.message });
-      res.status(500).json(formatResponse(false, 'Internal server error'));
-    }
-  }
-
-  async verifyOTP(req, res) {
+  verifyEmailOTP = async (req, res) => {
     try {
       const { otp, sessionId } = req.body;
-      const loginMethod = req.path.includes('phone') ? 'phone' : 'email';
       
-      // Verify OTP
-      const session = await this.sessionModel.verifyOTP(otp, sessionId, loginMethod);
+      if (!otp || !sessionId) {
+        return res.status(400).json(formatResponse(false, 'OTP and session ID are required'));
+      }
+      
+      const session = await this.loginSessionModel.verify(otp, sessionId, 'email');
       if (!session) {
         return res.status(400).json(formatResponse(false, 'Invalid or expired OTP'));
       }
       
-      // Mark OTP as used
-      await this.sessionModel.markOTPUsed(session.id);
+      await this.loginSessionModel.markUsed(session.id);
       
-      // Get user
-      const user = await this.userModel.findById(session.user_id);
+      const [users] = await this.pool.execute('SELECT * FROM users WHERE id = ?', [session.user_id]);
+      const user = users[0];
       
-      // Generate temporary token
       const tempToken = generateJWT({
         userId: user.id,
         sessionId,
         identifier: session.identifier,
-        loginMethod,
+        loginMethod: 'email',
         type: 'profile_completion'
-      }, '30m');
+      }, this.config.JWT_SECRET, '30m');
       
-      log('info', `${loginMethod} OTP verified`, { 
-        [loginMethod === 'email' ? 'email' : 'phone']: session.identifier, 
-        userId: user.id 
-      });
+      log('info', 'Email OTP verified', { email: session.identifier, userId: user.id });
       
       res.json(formatResponse(true, 'OTP verified successfully', {
         tempToken,
@@ -134,21 +99,30 @@ export class AuthController {
       }));
       
     } catch (error) {
-      log('error', 'OTP verification error', { error: error.message });
+      log('error', 'Email OTP verification error', { error: error.message });
       res.status(500).json(formatResponse(false, 'Internal server error'));
     }
-  }
+  };
 
-  async resendOTP(req, res) {
+  resendEmailOTP = async (req, res) => {
     try {
       const { sessionId } = req.body;
-      const loginMethod = req.path.includes('phone') ? 'phone' : 'email';
+      
+      if (!sessionId) {
+        return res.status(400).json(formatResponse(false, 'Session ID is required'));
+      }
       
       // Get active session
-      const session = await this.sessionModel.findActiveSession(sessionId, loginMethod);
-      if (!session) {
+      const [sessions] = await this.pool.execute(
+        'SELECT * FROM login_sessions WHERE session_id = ? AND expires_at > NOW() AND login_method = "email" ORDER BY created_at DESC LIMIT 1',
+        [sessionId]
+      );
+      
+      if (sessions.length === 0) {
         return res.status(404).json(formatResponse(false, 'Session not found or expired. Please start login again'));
       }
+      
+      const session = sessions[0];
       
       // Check cooldown (20 seconds)
       const twentySecondsAgo = new Date(Date.now() - 20 * 1000);
@@ -158,40 +132,173 @@ export class AuthController {
       }
       
       // Generate new OTP
-      const { otp: newOTP } = createOTPSession();
-      
-      // Update session
-      await this.sessionModel.updateOTP(sessionId, session.id, newOTP);
+      const newOTP = generateOTP();
+      await this.loginSessionModel.updateOTP(sessionId, newOTP);
       
       // Send new OTP
-      if (loginMethod === 'email') {
-        const emailResult = await sendLoginOTP(session.identifier, newOTP, true);
-        if (!emailResult.success) {
-          log('warn', 'Failed to resend email OTP', { email: session.identifier });
-        }
+      const emailOTPSender = sendLoginOTP(this.emailService, this.config);
+      const emailResult = await emailOTPSender(session.identifier, newOTP, true);
+      
+      if (!emailResult.success) {
+        log('warn', 'Failed to resend email OTP', { email: session.identifier });
       } else {
-        const smsResult = await sendPhoneOTP(session.identifier, newOTP, true);
-        if (!smsResult.success) {
-          log('warn', 'Failed to resend SMS OTP', { phone: session.identifier });
-        }
+        log('info', `🔄 Resend Email OTP for ${session.identifier}: ${newOTP} (Session: ${sessionId})`);
       }
       
-      const responseData = {
+      res.json(formatResponse(true, 'New verification code sent to your email address', {
         sessionId,
-        devMode: CONFIG.NODE_ENV === 'development' ? { otp: newOTP } : undefined
-      };
-      
-      if (loginMethod === 'email') {
-        responseData.emailSent = maskEmail(session.identifier);
-        res.json(formatResponse(true, 'New verification code sent to your email address', responseData));
-      } else {
-        responseData.phoneSent = maskPhone(session.identifier);
-        res.json(formatResponse(true, 'New verification code sent to your phone number', responseData));
-      }
+        emailSent: maskEmail(session.identifier),
+        devMode: this.config.NODE_ENV === 'development' ? { otp: newOTP } : undefined
+      }));
       
     } catch (error) {
-      log('error', 'Resend OTP error', { error: error.message });
+      log('error', 'Email resend OTP error', { error: error.message });
       res.status(500).json(formatResponse(false, 'Internal server error'));
     }
-  }
+  };
+
+  // =============================================================================
+  // PHONE LOGIN METHODS
+  // =============================================================================
+
+  phoneLogin = async (req, res) => {
+    try {
+      const { identifier, termsAccepted } = req.body;
+      
+      if (!identifier || !termsAccepted) {
+        return res.status(400).json(formatResponse(false, 'Phone number and terms acceptance are required'));
+      }
+      
+      const user = await this.userModel.findOrCreate(identifier, 'phone');
+      if (!user) {
+        return res.status(500).json(formatResponse(false, 'Unable to process request'));
+      }
+      
+      const sessionId = generateSessionId();
+      const otp = generateOTP();
+      
+      await this.loginSessionModel.create(identifier, otp, sessionId, user.id, 'phone', req);
+      
+      const phoneOTPSender = sendPhoneOTP(this.smsService, this.config);
+      const smsResult = await phoneOTPSender(identifier, otp);
+      
+      if (!smsResult.success) {
+        log('warn', 'Failed to send SMS OTP', { phone: identifier });
+      } else {
+        log('info', `🔧 Phone OTP for ${identifier}: ${otp} (Session: ${sessionId})`);
+      }
+      
+      log('info', 'Phone login initiated', { phone: identifier, sessionId });
+      
+      res.json(formatResponse(true, 'Verification code sent to your phone number', {
+        sessionId,
+        phoneSent: maskPhone(identifier),
+        loginType: 'phone',
+        devMode: this.config.NODE_ENV === 'development' ? { otp } : undefined
+      }));
+      
+    } catch (error) {
+      log('error', 'Phone login error', { error: error.message });
+      res.status(500).json(formatResponse(false, 'Internal server error'));
+    }
+  };
+
+  verifyPhoneOTP = async (req, res) => {
+    try {
+      const { otp, sessionId } = req.body;
+      
+      if (!otp || !sessionId) {
+        return res.status(400).json(formatResponse(false, 'OTP and session ID are required'));
+      }
+      
+      const session = await this.loginSessionModel.verify(otp, sessionId, 'phone');
+      if (!session) {
+        return res.status(400).json(formatResponse(false, 'Invalid or expired OTP'));
+      }
+      
+      await this.loginSessionModel.markUsed(session.id);
+      
+      const [users] = await this.pool.execute('SELECT * FROM users WHERE id = ?', [session.user_id]);
+      const user = users[0];
+      
+      const tempToken = generateJWT({
+        userId: user.id,
+        sessionId,
+        identifier: session.identifier,
+        loginMethod: 'phone',
+        type: 'profile_completion'
+      }, this.config.JWT_SECRET, '30m');
+      
+      log('info', 'Phone OTP verified', { phone: session.identifier, userId: user.id });
+      
+      res.json(formatResponse(true, 'OTP verified successfully', {
+        tempToken,
+        user: {
+          id: user.id,
+          email: user.email,
+          phone: user.phone,
+          loginMethod: user.login_method,
+          profileCompleted: user.profile_completed || false,
+          needsProfileCompletion: !user.profile_completed
+        }
+      }));
+      
+    } catch (error) {
+      log('error', 'Phone OTP verification error', { error: error.message });
+      res.status(500).json(formatResponse(false, 'Internal server error'));
+    }
+  };
+
+  resendPhoneOTP = async (req, res) => {
+    try {
+      const { sessionId } = req.body;
+      
+      if (!sessionId) {
+        return res.status(400).json(formatResponse(false, 'Session ID is required'));
+      }
+      
+      // Get active session
+      const [sessions] = await this.pool.execute(
+        'SELECT * FROM login_sessions WHERE session_id = ? AND expires_at > NOW() AND login_method = "phone" ORDER BY created_at DESC LIMIT 1',
+        [sessionId]
+      );
+      
+      if (sessions.length === 0) {
+        return res.status(404).json(formatResponse(false, 'Session not found or expired. Please start login again'));
+      }
+      
+      const session = sessions[0];
+      
+      // Check cooldown (20 seconds)
+      const twentySecondsAgo = new Date(Date.now() - 20 * 1000);
+      if (new Date(session.created_at) > twentySecondsAgo) {
+        const remainingSeconds = Math.ceil((new Date(session.created_at).getTime() + 20000 - Date.now()) / 1000);
+        return res.status(400).json(formatResponse(false, `Please wait ${remainingSeconds} seconds before requesting a new code`));
+      }
+      
+      // Generate new OTP
+      const newOTP = generateOTP();
+      await this.loginSessionModel.updateOTP(sessionId, newOTP);
+      
+      // Send new OTP
+      const phoneOTPSender = sendPhoneOTP(this.smsService, this.config);
+      const smsResult = await phoneOTPSender(session.identifier, newOTP, true);
+      
+      if (!smsResult.success) {
+        log('warn', 'Failed to resend SMS OTP', { phone: session.identifier });
+      } else {
+        log('info', `🔄 Resend Phone OTP for ${session.identifier}: ${newOTP} (Session: ${sessionId})`);
+      }
+      
+      res.json(formatResponse(true, 'New verification code sent to your phone number', {
+        sessionId,
+        phoneSent: maskPhone(session.identifier),
+        devMode: this.config.NODE_ENV === 'development' ? { otp: newOTP } : undefined
+      }));
+      
+    } catch (error) {
+      log('error', 'Phone resend OTP error', { error: error.message });
+      res.status(500).json(formatResponse(false, 'Internal server error'));
+    }
+  };
 }

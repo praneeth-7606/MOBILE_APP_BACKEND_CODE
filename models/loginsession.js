@@ -14,16 +14,7 @@ export class LoginSession {
     );
   }
 
-  async findActiveSession(sessionId, loginMethod) {
-    const [sessions] = await this.pool.execute(
-      'SELECT * FROM login_sessions WHERE session_id = ? AND expires_at > NOW() AND login_method = ? ORDER BY created_at DESC LIMIT 1',
-      [sessionId, loginMethod]
-    );
-    
-    return sessions.length > 0 ? sessions[0] : null;
-  }
-
-  async verifyOTP(otp, sessionId, loginMethod) {
+  async verify(otp, sessionId, loginMethod) {
     const [sessions] = await this.pool.execute(
       'SELECT * FROM login_sessions WHERE otp = ? AND session_id = ? AND expires_at > NOW() AND otp_used = FALSE AND login_method = ? ORDER BY created_at DESC LIMIT 1',
       [otp, sessionId, loginMethod]
@@ -32,21 +23,15 @@ export class LoginSession {
     return sessions.length > 0 ? sessions[0] : null;
   }
 
-  async markOTPUsed(sessionId) {
+  async markUsed(sessionId) {
     await this.pool.execute('UPDATE login_sessions SET otp_used = TRUE WHERE id = ?', [sessionId]);
   }
 
-  async updateOTP(sessionId, sessionDbId, newOTP) {
+  async updateOTP(sessionId, newOTP) {
     const newExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    
     await this.pool.execute(
-      'UPDATE login_sessions SET otp = ?, expires_at = ?, otp_used = FALSE, created_at = NOW() WHERE session_id = ? AND id = ?',
-      [newOTP, newExpiresAt, sessionId, sessionDbId]
+      'UPDATE login_sessions SET otp = ?, expires_at = ?, otp_used = FALSE, created_at = NOW() WHERE session_id = ?',
+      [newOTP, newExpiresAt, sessionId]
     );
-  }
-
-  async cleanup() {
-    const [result] = await this.pool.execute('DELETE FROM login_sessions WHERE expires_at < NOW()');
-    return result.affectedRows;
   }
 }

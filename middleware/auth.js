@@ -1,47 +1,29 @@
 import jwt from 'jsonwebtoken';
-import { CONFIG } from '../config/database.js';
 import { formatResponse } from '../utils/helpers.js';
 
-export const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json(formatResponse(false, 'Authorization token required'));
-  }
-  
-  const token = authHeader.substring(7);
-  
+export const authenticateToken = (pool, jwtSecret) => async (req, res, next) => {
   try {
-    const decoded = jwt.verify(token, CONFIG.JWT_SECRET);
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json(formatResponse(false, 'Authorization token required'));
+    }
+    
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, jwtSecret);
     
     if (decoded.type !== 'authentication') {
       return res.status(401).json(formatResponse(false, 'Invalid token type'));
     }
     
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json(formatResponse(false, 'Invalid or expired token'));
-  }
-};
-
-export const authenticateTempToken = (req, res, next) => {
-  const { tempToken } = req.body;
-  
-  if (!tempToken) {
-    return res.status(400).json(formatResponse(false, 'Temporary token is required'));
-  }
-  
-  try {
-    const decoded = jwt.verify(tempToken, CONFIG.JWT_SECRET);
-    
-    if (decoded.type !== 'profile_completion') {
-      return res.status(401).json(formatResponse(false, 'Invalid token type'));
+    const [users] = await pool.execute('SELECT * FROM users WHERE id = ?', [decoded.userId]);
+    if (users.length === 0) {
+      return res.status(404).json(formatResponse(false, 'User not found'));
     }
     
-    req.tempUser = decoded;
+    req.user = users[0];
+    req.token = decoded;
     next();
   } catch (error) {
-    return res.status(401).json(formatResponse(false, 'Invalid or expired token'));
+    res.status(401).json(formatResponse(false, 'Invalid or expired token'));
   }
 };
