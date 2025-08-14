@@ -1,146 +1,5 @@
 import mysql from 'mysql2/promise';
 
-// // export const createDatabaseConnection = async (config) => {
-// //   try {
-// //     // Connect without database first
-// //     const connection = await mysql.createConnection({
-// //       host: config.DB_HOST,
-// //       user: config.DB_USER,
-// //       password: config.DB_PASSWORD,
-// //       port: config.DB_PORT
-// //     });
-    
-// //     // Create database if it doesn't exist
-// //     await connection.execute(`CREATE DATABASE IF NOT EXISTS ${config.DB_NAME}`);
-// //     console.log(`✅ Database '${config.DB_NAME}' ready`);
-    
-// //     await connection.end();
-    
-// //     // Create pool connection
-// //     const pool = mysql.createPool({
-// //       host: config.DB_HOST,
-// //       user: config.DB_USER,
-// //       password: config.DB_PASSWORD,
-// //       database: config.DB_NAME,
-// //       port: config.DB_PORT,
-// //       ssl: config.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false,
-// //       waitForConnections: true,
-// //       connectionLimit: 10,
-// //       queueLimit: 0,
-// //       acquireTimeout: 60000,
-// //       timeout: 60000
-// //     });
-    
-// //     return pool;
-// //   } catch (error) {
-// //     console.error('❌ Database connection failed:', error.message);
-// //     throw error;
-// //   }
-// // };
-
-
-// import mysql from 'mysql2/promise';
-
-// export const createDatabaseConnection = async (config) => {
-//   try {
-//     // Connect without database first
-//     const connection = await mysql.createConnection({
-//       host: config.DB_HOST,
-//       user: config.DB_USER,
-//       password: config.DB_PASSWORD,
-//       port: config.DB_PORT,
-//       // FIX: Railway MySQL SSL settings
-//       ssl: config.NODE_ENV === 'production' ? { 
-//         rejectUnauthorized: false  // Changed from true to false
-//       } : false,
-//       connectTimeout: 60000,  // Add connection timeout
-//       timeout: 60000
-//     });
-    
-//     // Create database if it doesn't exist
-//     await connection.execute(`CREATE DATABASE IF NOT EXISTS ${config.DB_NAME}`);
-//     console.log(`✅ Database '${config.DB_NAME}' ready`);
-    
-//     await connection.end();
-    
-//     // Create pool connection
-//     const pool = mysql.createPool({
-//       host: config.DB_HOST,
-//       user: config.DB_USER,
-//       password: config.DB_PASSWORD,
-//       database: config.DB_NAME,
-//       port: config.DB_PORT,
-//       // FIX: Same SSL settings for pool
-//       ssl:  false,
-//       waitForConnections: true,
-//       connectionLimit: 10,
-//       queueLimit: 0,
-//       acquireTimeout: 60000,
-//       timeout: 60000,
-//       connectTimeout: 60000  // Add this
-//     });
-    
-//     return pool;
-//   } catch (error) {
-//     console.error('❌ Database connection failed:', error.message);
-//     throw error;
-//   }
-// };
-// export const createDatabaseConnection = async (config) => {
-//   try {
-//     console.log('🔗 Attempting to connect to database...');
-//     console.log(`   Host: ${config.DB_HOST}`);
-//     console.log(`   Port: ${config.DB_PORT}`);
-//     console.log(`   User: ${config.DB_USER}`);
-//     console.log(`   Database: ${config.DB_NAME}`);
-    
-//     const connection = await mysql.createConnection({
-//       host: config.DB_HOST,
-//       user: config.DB_USER,
-//       password: config.DB_PASSWORD,
-//       port: config.DB_PORT,
-//       // REQUIRED for Railway external connections
-//       ssl: { rejectUnauthorized: false },
-//       connectTimeout: 30000
-//     });
-    
-//     console.log('✅ Initial database connection successful!');
-    
-//     await connection.execute(`CREATE DATABASE IF NOT EXISTS ${config.DB_NAME}`);
-//     console.log(`✅ Database '${config.DB_NAME}' created/verified successfully!`);
-    
-//     await connection.end();
-//     console.log('🔌 Initial connection closed, creating connection pool...');
-    
-//     const pool = mysql.createPool({
-//       host: config.DB_HOST,
-//       user: config.DB_USER,
-//       password: config.DB_PASSWORD,
-//       database: config.DB_NAME,
-//       port: config.DB_PORT,
-//       ssl: { rejectUnauthorized: false },
-//       waitForConnections: true,
-//       connectionLimit: 10,
-//       acquireTimeout: 30000
-//     });
-    
-//     // Test the pool connection
-//     const testConnection = await pool.getConnection();
-//     console.log('✅ Database connection pool created successfully!');
-//     console.log('🎉 Ready to execute database operations!');
-//     testConnection.release();
-    
-//     return pool;
-//   } catch (error) {
-//     console.error('❌ Database connection failed:', error.message);
-//     console.error('💡 Check your database credentials and network connection');
-//     throw error;
-//   }
-// };
-
-
-// import mysql from 'mysql2/promise';
-
 let pool;
 
 // Function to drop all existing tables
@@ -358,12 +217,19 @@ const createFreshTables = async (pool) => {
 // Function to insert sample data
 const insertSampleData = async (pool, nodeEnv) => {
   if (nodeEnv !== 'development') {
-    console.log('ℹ️ Skipping sample data (not in development mode)');
+    console.log('ℹ️ Skipping sample data (not in production mode)');
     return;
   }
   
   try {
     console.log('📝 Inserting sample data...');
+    
+    // Check if users already exist
+    const [existingUsers] = await pool.execute('SELECT COUNT(*) as count FROM users');
+    if (existingUsers[0].count > 0) {
+      console.log('ℹ️ Sample data already exists, skipping insertion');
+      return;
+    }
     
     // Insert sample users
     await pool.execute(`
@@ -397,81 +263,190 @@ const insertSampleData = async (pool, nodeEnv) => {
   }
 };
 
-// Main database connection function
-export const createDatabaseConnection = async (config) => {
+// Function to validate database connection
+const validateDatabaseConnection = async () => {
   try {
-    console.log('🔗 Attempting to connect to database...');
-    console.log(`   Host: ${config.DB_HOST}`);
-    console.log(`   Port: ${config.DB_PORT}`);
-    console.log(`   User: ${config.DB_USER}`);
-    console.log(`   Database: ${config.DB_NAME}`);
-    
-    // Connect without database first
-    const connection = await mysql.createConnection({
-      host: config.DB_HOST,
-      user: config.DB_USER,
-      password: config.DB_PASSWORD,
-      port: config.DB_PORT,
-      ssl: { rejectUnauthorized: false },
-      connectTimeout: 30000
-    });
-    
-    console.log('✅ Initial database connection successful!');
-    
-    // Create database if it doesn't exist
-    await connection.execute(`CREATE DATABASE IF NOT EXISTS ${config.DB_NAME}`);
-    console.log(`✅ Database '${config.DB_NAME}' created/verified successfully!`);
-    
-    await connection.end();
-    console.log('🔌 Initial connection closed, creating connection pool...');
-    
-    // Create pool connection to the specific database
-    pool = mysql.createPool({
-      host: config.DB_HOST,
-      user: config.DB_USER,
-      password: config.DB_PASSWORD,
-      database: config.DB_NAME,
-      port: config.DB_PORT,
-      ssl: { rejectUnauthorized: false },
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-      acquireTimeout: 30000
-    });
-    
-    // Test the pool connection
-    const testConnection = await pool.getConnection();
-    console.log('✅ Database connection pool created successfully!');
-    testConnection.release();
-    
-    // Check existing tables
-    console.log('🔍 Checking existing tables...');
-    const [existingTables] = await pool.execute('SHOW TABLES');
-    console.log(`📋 Found ${existingTables.length} existing tables:`, 
-                existingTables.map(t => Object.values(t)[0]));
-    
-    // FRESH START: Drop all existing tables and create new ones
-    await dropAllTables(pool);
-    await createFreshTables(pool);
-    
-    // Verify final table count
-    const [finalTables] = await pool.execute('SHOW TABLES');
-    console.log(`📋 Total tables after fresh creation: ${finalTables.length}`);
-    
-    // Insert sample data in development
-    await insertSampleData(pool, config.NODE_ENV);
-    
-    console.log('🎉 Fresh database setup complete!');
-    
-    return pool;
-    
+    console.log('🔍 Validating database connection...');
+    const [result] = await pool.execute('SELECT 1 as test, NOW() as timestamp');
+    console.log('✅ Database validation successful:', result[0]);
+    return true;
   } catch (error) {
-    console.error('❌ Database connection failed:', error.message);
-    console.error('💡 Check your database credentials and network connection');
-    throw error;
+    console.error('❌ Database validation failed:', error.message);
+    return false;
   }
 };
 
-export const getPool = () => pool;
+// Function to setup connection event handlers
+const setupConnectionHandlers = (pool) => {
+  pool.on('connection', (connection) => {
+    console.log('🔗 New database connection established as id', connection.threadId);
+  });
+  
+  pool.on('error', (error) => {
+    console.error('❌ Database pool error:', error.message);
+    if (error.code === 'PROTOCOL_CONNECTION_LOST') {
+      console.log('🔄 Database connection lost, pool will attempt to reconnect...');
+    } else if (error.code === 'ER_CON_COUNT_ERROR') {
+      console.log('⚠️ Database has too many connections');
+    } else if (error.code === 'ECONNREFUSED') {
+      console.log('❌ Database connection was refused');
+    }
+  });
+  
+  pool.on('acquire', (connection) => {
+    console.log('🎯 Connection %d acquired', connection.threadId);
+  });
+  
+  pool.on('release', (connection) => {
+    console.log('🔓 Connection %d released', connection.threadId);
+  });
+};
 
-export default { createDatabaseConnection, getPool };
+// Function to setup keep-alive mechanism
+const setupKeepAlive = (pool) => {
+  // Keep database connection alive by pinging every 5 minutes
+  setInterval(async () => {
+    try {
+      await pool.execute('SELECT 1');
+      console.log('🔄 Database ping successful');
+    } catch (error) {
+      console.error('❌ Database ping failed:', error.message);
+    }
+  }, 5 * 60 * 1000); // Every 5 minutes
+  
+  console.log('✅ Database keep-alive mechanism started');
+};
+
+// Main database connection function with retry logic
+export const createDatabaseConnection = async (config) => {
+  let retries = 3;
+  
+  while (retries > 0) {
+    try {
+      console.log(`🔗 Attempting to connect to database... (${4 - retries}/3)`);
+      console.log(`   Host: ${config.DB_HOST}`);
+      console.log(`   Port: ${config.DB_PORT}`);
+      console.log(`   User: ${config.DB_USER}`);
+      console.log(`   Database: ${config.DB_NAME}`);
+      
+      // Connect without database first
+      const connection = await mysql.createConnection({
+        host: config.DB_HOST,
+        user: config.DB_USER,
+        password: config.DB_PASSWORD,
+        port: config.DB_PORT,
+        ssl: { rejectUnauthorized: false },
+        connectTimeout: 30000,
+        acquireTimeout: 30000,
+        timeout: 30000
+      });
+      
+      console.log('✅ Initial database connection successful!');
+      
+      // Create database if it doesn't exist
+      await connection.execute(`CREATE DATABASE IF NOT EXISTS ${config.DB_NAME}`);
+      console.log(`✅ Database '${config.DB_NAME}' created/verified successfully!`);
+      
+      await connection.end();
+      console.log('🔌 Initial connection closed, creating connection pool...');
+      
+      // Create pool connection to the specific database
+      pool = mysql.createPool({
+        host: config.DB_HOST,
+        user: config.DB_USER,
+        password: config.DB_PASSWORD,
+        database: config.DB_NAME,
+        port: config.DB_PORT,
+        ssl: { rejectUnauthorized: false },
+        waitForConnections: true,
+        connectionLimit: 3,        // Reduced for Railway free tier
+        queueLimit: 0,
+        acquireTimeout: 30000,
+        timeout: 30000,
+        reconnect: true,
+        idleTimeout: 300000,      // 5 minutes
+        maxReconnects: 3,
+        multipleStatements: false,
+        supportBigNumbers: true,
+        bigNumberStrings: true
+      });
+      
+      console.log('✅ Database connection pool created successfully!');
+      
+      // Setup connection event handlers
+      setupConnectionHandlers(pool);
+      
+      // Test the pool connection
+      const testConnection = await pool.getConnection();
+      console.log('✅ Pool connection test successful!');
+      testConnection.release();
+      
+      // Validate connection
+      const isValid = await validateDatabaseConnection();
+      if (!isValid) {
+        throw new Error('Database connection validation failed');
+      }
+      
+      // Check existing tables
+      console.log('🔍 Checking existing tables...');
+      const [existingTables] = await pool.execute('SHOW TABLES');
+      console.log(`📋 Found ${existingTables.length} existing tables:`, 
+                  existingTables.map(t => Object.values(t)[0]));
+      
+      // FRESH START: Drop all existing tables and create new ones
+      await dropAllTables(pool);
+      await createFreshTables(pool);
+      
+      // Verify final table count
+      const [finalTables] = await pool.execute('SHOW TABLES');
+      console.log(`📋 Total tables after fresh creation: ${finalTables.length}`);
+      
+      // Insert sample data in development
+      await insertSampleData(pool, config.NODE_ENV);
+      
+      // Setup keep-alive mechanism
+      setupKeepAlive(pool);
+      
+      console.log('🎉 Fresh database setup complete!');
+      
+      return pool;
+      
+    } catch (error) {
+      retries--;
+      console.error(`❌ Database connection attempt failed: ${error.message}`);
+      
+      if (retries === 0) {
+        console.error('💡 All connection attempts failed. Please check:');
+        console.error('   - Railway MySQL service is running');
+        console.error('   - Database credentials are correct');
+        console.error('   - Network connectivity');
+        throw error;
+      }
+      
+      console.log(`⏳ Retrying in 5 seconds... (${retries} attempts left)`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+};
+
+// Get pool instance
+export const getPool = () => {
+  if (!pool) {
+    throw new Error('Database pool not initialized. Call createDatabaseConnection first.');
+  }
+  return pool;
+};
+
+// Cleanup function for graceful shutdown
+export const closePool = async () => {
+  if (pool) {
+    try {
+      await pool.end();
+      console.log('✅ Database pool closed gracefully');
+    } catch (error) {
+      console.error('❌ Error closing database pool:', error.message);
+    }
+  }
+};
+
+export default { createDatabaseConnection, getPool, closePool };
