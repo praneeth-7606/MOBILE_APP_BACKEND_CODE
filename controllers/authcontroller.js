@@ -143,13 +143,18 @@ export class AuthController {
       
       // Send new OTP
       const emailOTPSender = sendLoginOTP(this.emailService, this.config);
-      const emailResult = await emailOTPSender(session.identifier, newOTP, true);
-      
-      if (!emailResult.success) {
-        log('warn', 'Failed to resend email OTP', { email: session.identifier });
-      } else {
-        log('info', `🔄 Resend Email OTP for ${session.identifier}: ${newOTP} (Session: ${sessionId})`);
-      }
+       emailOTPSender(session.identifier, newOTP, true)
+        .then(emailResult => {
+          if (!emailResult.success) {
+            log('warn', 'Failed to resend email OTP', { email: session.identifier });
+          } else {
+            log('info', `🔄 Resend Email OTP for ${session.identifier}: ${newOTP} (Session: ${sessionId})`);
+          }
+        })
+        .catch(error => {
+          // Add a .catch() to prevent UnhandledPromiseRejection errors
+          log('error', 'Fire-and-forget email resend failed', { error: error.message });
+        });
       
       res.json(formatResponse(true, 'New verification code sent to your email address', {
         sessionId,
