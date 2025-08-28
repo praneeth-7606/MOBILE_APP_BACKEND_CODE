@@ -35,13 +35,19 @@ export class AuthController {
       await this.loginSessionModel.create(identifier, otp, sessionId, user.id, 'email', req);
       
       const emailOTPSender = sendLoginOTP(this.emailService, this.config);
-      const emailResult = await emailOTPSender(identifier, otp);
-      
-      if (!emailResult.success) {
-        log('warn', 'Failed to send email OTP', { email: identifier });
-      } else {
-        log('info', `🔧 Email OTP for ${identifier}: ${otp} (Session: ${sessionId})`);
-      }
+      emailOTPSender(identifier, otp)
+        .then(emailResult => {
+          if (!emailResult.success) {
+            log('warn', 'Failed to send email OTP', { email: identifier });
+          } else {
+            log('info', `🔧 Email OTP for ${identifier}: ${otp} (Session: ${sessionId})`);
+          }
+        })
+        .catch(error => {
+          // You MUST have a .catch() block to prevent an UnhandledPromiseRejection error
+          log('error', 'Fire-and-forget email sending failed', { error: error.message });
+        });
+      // --- END OF CHANGE ---
       
       log('info', 'Email login initiated', { email: identifier, sessionId });
       
